@@ -333,9 +333,6 @@ class DepQBFSolver:
         
         print(f"DEBUG COMPLEX OR: Input parts: {parts}")
         
-        # For (A && B) || (C && D), convert to CNF: (A || C) && (A || D) && (B || C) && (B || D)
-        # But this gets complex quickly. For now, let's handle the simple case properly.
-        
         cnf_parts = []
         
         for i, part in enumerate(parts):
@@ -355,32 +352,38 @@ class DepQBFSolver:
         
         print(f"DEBUG COMPLEX OR: All CNF parts: {cnf_parts}")
         
-        # For simple case with 2 parts: (A && B) || (C && D)
-        if len(cnf_parts) == 2:
-            part1_cnf = cnf_parts[0]  # [[A], [B]]
-            part2_cnf = cnf_parts[1]  # [[C], [D]]
-            
-            print(f"DEBUG COMPLEX OR: Part 1 CNF: {part1_cnf}")
-            print(f"DEBUG COMPLEX OR: Part 2 CNF: {part2_cnf}")
-            
-            # Apply distributive law: (A && B) || (C && D) = (A || C) && (A || D) && (B || C) && (B || D)
-            result_cnf = []
-            
-            for i, clause1 in enumerate(part1_cnf):
-                for j, clause2 in enumerate(part2_cnf):
-                    # Combine clauses: [A] || [C] = [A, C]
-                    combined_clause = clause1 + clause2
-                    result_cnf.append(combined_clause)
-                    print(f"DEBUG COMPLEX OR: Combined clause {i+1},{j+1}: {clause1} + {clause2} = {combined_clause}")
-            
-            print(f"DEBUG COMPLEX OR: Final result CNF: {result_cnf}")
-            return result_cnf
+        # Apply distributive law for multiple parts
+        # For (A && B) || (C && D) || E, convert to CNF using distributive expansion
+        result_cnf = []
         
-        else:
-            # For more complex cases, use approximation
-            logger.warning(f"Complex OR with {len(cnf_parts)} parts - using approximation")
-            print(f"DEBUG COMPLEX OR: Too many parts ({len(cnf_parts)}), using tautology")
-            return [[1, -1]]  # Tautology fallback
+        # Start with the first part
+        if not cnf_parts:
+            return [[1, -1]]  # Fallback
+        
+        # Initialize with first part
+        current_combinations = cnf_parts[0]
+        print(f"DEBUG COMPLEX OR: Starting with first part: {current_combinations}")
+        
+        # For each additional part, apply distributive law
+        for i in range(1, len(cnf_parts)):
+            next_part = cnf_parts[i]
+            print(f"DEBUG COMPLEX OR: Combining with part {i+1}: {next_part}")
+            
+            new_combinations = []
+            
+            # For each existing combination, combine with each clause from the next part
+            for existing_clause in current_combinations:
+                for new_clause in next_part:
+                    # Combine clauses: [A] || [C] = [A, C]
+                    combined_clause = existing_clause + new_clause
+                    new_combinations.append(combined_clause)
+                    print(f"DEBUG COMPLEX OR: Combined: {existing_clause} + {new_clause} = {combined_clause}")
+            
+            current_combinations = new_combinations
+            print(f"DEBUG COMPLEX OR: Current combinations after part {i+1}: {current_combinations}")
+        
+        print(f"DEBUG COMPLEX OR: Final result CNF: {current_combinations}")
+        return current_combinations
     
     def _normalize_formula_syntax(self, formula: str) -> str:
         """Normalize different formula syntax variations - FIXED SPACING"""
