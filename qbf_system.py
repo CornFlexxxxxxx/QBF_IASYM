@@ -56,6 +56,7 @@ import org.tweetyproject.logics.pl.syntax.PlBeliefSet;
 import org.tweetyproject.logics.pl.syntax.PlFormula;
 import org.tweetyproject.logics.pl.syntax.Contradiction;
 import java.io.*;
+import java.util.*;
 
 public class TweetyQBFBridge {
     public static void main(String[] args) {
@@ -66,37 +67,71 @@ public class TweetyQBFBridge {
         
         try {
             String qbfContent = args[0];
+            System.err.println("DEBUG: Processing QBF content: " + qbfContent);
             
             File tempFile = File.createTempFile("qbf_", ".qbf");
+            System.err.println("DEBUG: Created temp file: " + tempFile.getAbsolutePath());
+            
             try (FileWriter writer = new FileWriter(tempFile)) {
                 writer.write(qbfContent);
+            }
+            System.err.println("DEBUG: Successfully wrote to temp file");
+            
+            // Read back the file to verify
+            try (BufferedReader reader = new BufferedReader(new FileReader(tempFile))) {
+                String line;
+                System.err.println("DEBUG: File contents:");
+                while ((line = reader.readLine()) != null) {
+                    System.err.println("DEBUG: " + line);
+                }
             }
             
             QbfParser parser = new QbfParser();
             PlBeliefSet beliefSet = (PlBeliefSet) parser.parseBeliefBaseFromFile(tempFile.getAbsolutePath());
+            System.err.println("DEBUG: Parsed belief set, size: " + beliefSet.size());
             
-            PlFormula formula = null;
             if (!beliefSet.isEmpty()) {
-                formula = beliefSet.iterator().next();
-            }
-            
-            if (formula != null) {
-                NaiveQbfReasoner reasoner = new NaiveQbfReasoner();
-                Contradiction contradiction = new Contradiction();
-                boolean isContradictory = reasoner.query(beliefSet, contradiction);
+                PlFormula formula = (PlFormula) beliefSet.iterator().next();
+                System.err.println("DEBUG: Got formula: " + formula.getClass().getName());
+                System.err.println("DEBUG: Formula toString: " + formula.toString());
                 
-                if (isContradictory) {
+                NaiveQbfReasoner reasoner = new NaiveQbfReasoner();
+                
+                // For QBF, we need to check if the formula is a tautology
+                // If reasoner.query(beliefSet, formula) returns true, it means the formula is satisfiable
+                // But for universally quantified formulas, we want to know if it's always true
+                
+                // Create a new belief set with just the formula
+                PlBeliefSet singleFormulaSet = new PlBeliefSet();
+                singleFormulaSet.add(formula);
+                
+                // Check if the formula is satisfiable
+                boolean isSatisfiable = reasoner.query(singleFormulaSet, formula);
+                System.err.println("DEBUG: Formula satisfiability: " + isSatisfiable);
+                
+                // For contradiction check, we test if adding the formula leads to inconsistency
+                Contradiction contradiction = new Contradiction();
+                boolean isInconsistent = reasoner.query(singleFormulaSet, contradiction);
+                System.err.println("DEBUG: Formula leads to contradiction: " + isInconsistent);
+                
+                // A universally quantified formula like ∀x (x ∧ ¬x) should be unsatisfiable
+                // because x ∧ ¬x is always false regardless of x's value
+                if (isInconsistent || !isSatisfiable) {
                     System.out.println("RESULT: UNSATISFIABLE");
                 } else {
                     System.out.println("RESULT: SATISFIABLE");
                 }
             } else {
+                System.err.println("DEBUG: Belief set is empty!");
                 System.out.println("RESULT: ERROR");
             }
             
-            tempFile.delete();
+            boolean deleted = tempFile.delete();
+            System.err.println("DEBUG: Temp file deleted: " + deleted);
             
         } catch (Exception e) {
+            System.err.println("ERROR: Exception occurred:");
+            e.printStackTrace(System.err);
             System.out.println("RESULT: ERROR");
         }
     }
@@ -106,7 +141,7 @@ public class TweetyQBFBridge {
         with open(bridge_file, 'w') as f:
             f.write(java_code)
         
-        # Remove old class file
+        # Remove old class file to force recompilation
         class_file = self.bridge_dir / "TweetyQBFBridge.class"
         if class_file.exists():
             class_file.unlink()
@@ -118,8 +153,14 @@ public class TweetyQBFBridge {
                 "javac", "-cp", str(self.jar_path), str(bridge_file)
             ], capture_output=True, text=True)
             
+            if result.returncode != 0:
+                print("COMPILATION ERROR:")
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+            
             return result.returncode == 0
-        except Exception:
+        except Exception as e:
+            print(f"Compilation exception: {e}")
             return False
     
     def evaluate_qbf(self, formula: QBFFormula) -> QBFEvaluationResult:
@@ -133,6 +174,7 @@ public class TweetyQBFBridge {
                     return self._error_result(formula, start_time, "Compilation failed")
             
             qbf_content = self._to_qbf_format(formula)
+            print(f"DEBUG: QBF content being sent to Java: {qbf_content}")
             
             cmd = [
                 "java", "-cp", f"{self.jar_path}:{self.bridge_dir}",
@@ -141,6 +183,11 @@ public class TweetyQBFBridge {
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             execution_time = time.time() - start_time
+            
+            # Print debug info
+            print(f"DEBUG: Java stdout: {result.stdout}")
+            print(f"DEBUG: Java stderr: {result.stderr}")
+            print(f"DEBUG: Return code: {result.returncode}")
             
             qbf_result = self._parse_output(result.stdout)
             
