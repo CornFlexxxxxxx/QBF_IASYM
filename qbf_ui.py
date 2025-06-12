@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 QBF Logic System - Interactive Web UI
-Modern interface for QBF reasoning with TweetyProject and LLM integration
+Modern interface for QBF reasoning with DepQBF and TweetyProject integration
 """
 
 import streamlit as st
@@ -14,7 +14,7 @@ import json
 sys.path.append(str(Path(__file__).parent))
 
 try:
-    from qbf_system import QBFLogicSystem
+    from qbf_system import QBFLogicSystem, QBFFormula
     from config import Config
 except ImportError as e:
     st.error(f"Import error: {e}")
@@ -36,6 +36,25 @@ st.markdown("""
         padding: 2rem;
         border-radius: 10px;
         margin-bottom: 2rem;
+        color: white;
+    }
+    
+    .solver-badge {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: bold;
+        margin-left: 1rem;
+    }
+    
+    .depqbf-badge {
+        background-color: #28a745;
+        color: white;
+    }
+    
+    .tweety-badge {
+        background-color: #fd7e14;
         color: white;
     }
     
@@ -79,29 +98,63 @@ st.markdown("""
         border-radius: 8px;
         text-align: center;
     }
+    
+    .solver-comparison {
+        background-color: #e9ecef;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'system' not in st.session_state:
+# Initialize session state with solver preference
+if 'solver_preference' not in st.session_state:
+    st.session_state.solver_preference = "DepQBF"
+
+if 'system' not in st.session_state or st.session_state.get('current_solver') != st.session_state.solver_preference:
     try:
+        use_depqbf = st.session_state.solver_preference == "DepQBF"
         st.session_state.system = QBFLogicSystem(
             jar_path=str(Config.JAR_PATH),
-            llm_api_key=Config.get_api_key()
+            llm_api_key=Config.get_api_key(),
+            use_depqbf=use_depqbf
         )
         st.session_state.initialized = True
+        st.session_state.current_solver = st.session_state.solver_preference
+        st.session_state.init_error = None
     except Exception as e:
         st.session_state.initialized = False
         st.session_state.init_error = str(e)
+        # Try fallback to TweetyProject if DepQBF fails
+        if st.session_state.solver_preference == "DepQBF":
+            try:
+                st.session_state.system = QBFLogicSystem(
+                    jar_path=str(Config.JAR_PATH),
+                    llm_api_key=Config.get_api_key(),
+                    use_depqbf=False
+                )
+                st.session_state.initialized = True
+                st.session_state.current_solver = "TweetyProject"
+                st.session_state.fallback_used = True
+            except Exception as e2:
+                st.session_state.init_error = f"Both solvers failed: DepQBF ({e}), TweetyProject ({e2})"
 
 if 'history' not in st.session_state:
     st.session_state.history = []
 
-# Main header
-st.markdown("""
+# Main header with solver badge
+solver_badge_class = "depqbf-badge" if st.session_state.get('current_solver') == "DepQBF" else "tweety-badge"
+solver_display = st.session_state.get('current_solver', 'Unknown')
+
+st.markdown(f"""
 <div class="main-header">
-    <h1>🧠 QBF Logic System</h1>
-    <p>Quantified Boolean Formula reasoning powered by TweetyProject and LLM integration</p>
+    <h1>🧠 QBF Logic System
+        <span class="solver-badge {solver_badge_class}">
+            {solver_display} Solver
+        </span>
+    </h1>
+    <p>Quantified Boolean Formula reasoning with advanced solvers and LLM integration</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -110,20 +163,56 @@ if not st.session_state.get('initialized', False):
     st.error(f"❌ System initialization failed: {st.session_state.get('init_error', 'Unknown error')}")
     st.info("Please check your configuration:")
     st.code("""
-    1. Ensure TweetyProject JAR is in the project directory
-    2. Set your LLM API key in .env file
-    3. Verify Java is installed and accessible
+    1. For DepQBF: Install with 'sudo apt install depqbf' or let the system compile from source
+    2. For TweetyProject: Ensure JAR is in the project directory
+    3. Set your LLM API key in .env file
+    4. Verify Java is installed and accessible
     """)
     st.stop()
+
+# Show fallback warning if applicable
+if st.session_state.get('fallback_used'):
+    st.warning("⚠️ DepQBF solver not available, using TweetyProject as fallback. Results may differ for complex QBF formulas.")
 
 # Sidebar
 with st.sidebar:
     st.header("🎛️ Control Panel")
     
+    # Solver selection
+    st.subheader("⚙️ Solver Settings")
+    new_solver = st.selectbox(
+        "QBF Solver:",
+        ["DepQBF", "TweetyProject"],
+        index=0 if st.session_state.solver_preference == "DepQBF" else 1,
+        help="DepQBF is recommended for accurate QBF evaluation"
+    )
+    
+    if new_solver != st.session_state.solver_preference:
+        st.session_state.solver_preference = new_solver
+        st.rerun()
+    
+    # Solver comparison info
+    with st.expander("🔍 Solver Comparison"):
+        st.markdown("""
+        **DepQBF (Recommended)**
+        - ✅ Proper QBF semantics
+        - ✅ Handles quantifier alternation
+        - ✅ Standard QDIMACS format
+        - ✅ Fast and reliable
+        
+        **TweetyProject**  
+        - ⚠️ Naive QBF reasoning
+        - ⚠️ May give incorrect results
+        - ✅ Java-based integration
+        - ✅ Always available
+        """)
+    
+    st.markdown("---")
+    
     # Mode selection
     mode = st.selectbox(
         "Select Mode",
-        ["🗣️ Natural Language", "🔢 Direct QBF", "📚 Examples", "📊 Batch Analysis"]
+        ["🗣️ Natural Language", "🔢 Direct QBF", "📚 Examples", "🧪 Solver Comparison", "📊 Batch Analysis"]
     )
     
     st.markdown("---")
@@ -142,7 +231,10 @@ with st.sidebar:
     
     # System info
     with st.expander("ℹ️ System Info"):
-        st.write("**TweetyProject**: Ready ✅")
+        st.write(f"**Current Solver**: {st.session_state.get('current_solver', 'Unknown')} ✅")
+        if st.session_state.get('current_solver') == "DepQBF":
+            st.write("**DepQBF**: Available ✅")
+        st.write("**TweetyProject**: Ready ✅")  
         st.write("**LLM Integration**: Ready ✅")
         st.write("**Java Bridge**: Compiled ✅")
     
@@ -152,9 +244,156 @@ with st.sidebar:
         st.rerun()
 
 # Main content area
-if mode == "🗣️ Natural Language":
+if mode == "🧪 Solver Comparison":
+    st.header("🧪 Solver Comparison")
+    st.write("Compare results between DepQBF and TweetyProject solvers on problematic cases.")
+    
+    # Test cases that were problematic
+    test_cases = [
+        {
+            "name": "Problematic Case 1",
+            "description": "∃y: (∀x: (x ∧ ¬y)) - Should be UNSATISFIABLE",
+            "formula": "x && !y",
+            "variables": ["x", "y"],
+            "quantifiers": [("exists", "y"), ("forall", "x")],
+            "expected": "UNSATISFIABLE"
+        },
+        {
+            "name": "Problematic Case 2", 
+            "description": "∃x: (∀y: (x ∧ ¬y)) - Should be UNSATISFIABLE",
+            "formula": "x && !y",
+            "variables": ["x", "y"],
+            "quantifiers": [("exists", "x"), ("forall", "y")],
+            "expected": "UNSATISFIABLE"
+        },
+        {
+            "name": "Simple Tautology",
+            "description": "∀x: (x ∨ ¬x) - Should be SATISFIABLE",
+            "formula": "x || !x",
+            "variables": ["x"],
+            "quantifiers": [("forall", "x")],
+            "expected": "SATISFIABLE"
+        },
+        {
+            "name": "Simple Contradiction",
+            "description": "∃x: (x ∧ ¬x) - Should be UNSATISFIABLE",
+            "formula": "x && !x",
+            "variables": ["x"],
+            "quantifiers": [("exists", "x")],
+            "expected": "UNSATISFIABLE"
+        }
+    ]
+    
+    if st.button("🚀 Run Comparison Test", type="primary"):
+        st.subheader("📊 Comparison Results")
+        
+        results = []
+        progress_bar = st.progress(0)
+        
+        for i, test_case in enumerate(test_cases):
+            with st.spinner(f"Testing: {test_case['name']}"):
+                # Test with both solvers
+                solver_results = {}
+                
+                for solver_name in ["DepQBF", "TweetyProject"]:
+                    try:
+                        # Create system with specific solver
+                        use_depqbf = solver_name == "DepQBF"
+                        test_system = QBFLogicSystem(
+                            jar_path=str(Config.JAR_PATH),
+                            llm_api_key=Config.get_api_key(),
+                            use_depqbf=use_depqbf
+                        )
+                        
+                        result = test_system.evaluate_qbf(
+                            test_case['formula'],
+                            test_case['variables'],
+                            test_case['quantifiers']
+                        )
+                        
+                        solver_results[solver_name] = {
+                            'result': result['result'],
+                            'time': result['execution_time'],
+                            'correct': result['result'] == test_case['expected']
+                        }
+                        
+                    except Exception as e:
+                        solver_results[solver_name] = {
+                            'result': 'ERROR',
+                            'time': 0,
+                            'error': str(e),
+                            'correct': False
+                        }
+                
+                results.append({
+                    'test_case': test_case,
+                    'results': solver_results
+                })
+            
+            progress_bar.progress((i + 1) / len(test_cases))
+        
+        # Display results
+        for i, test_result in enumerate(results):
+            test_case = test_result['test_case']
+            solver_results = test_result['results']
+            
+            st.subheader(f"🧪 {test_case['name']}")
+            st.write(test_case['description'])
+            
+            # Formula display
+            quantifier_str = " ".join([f"{'∀' if q == 'forall' else '∃'}{v}" for q, v in test_case['quantifiers']])
+            full_formula = f"{quantifier_str} ({test_case['formula']})"
+            st.markdown(f'<div class="formula-display">{full_formula}</div>', unsafe_allow_html=True)
+            
+            # Results comparison
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.write("**Expected Result:**")
+                st.info(test_case['expected'])
+            
+            with col2:
+                st.write("**DepQBF Result:**")
+                depqbf_result = solver_results.get('DepQBF', {})
+                if depqbf_result.get('correct'):
+                    st.success(f"✅ {depqbf_result['result']} ({depqbf_result['time']:.3f}s)")
+                else:
+                    st.error(f"❌ {depqbf_result.get('result', 'ERROR')} ({depqbf_result.get('time', 0):.3f}s)")
+            
+            with col3:
+                st.write("**TweetyProject Result:**")
+                tweety_result = solver_results.get('TweetyProject', {})
+                if tweety_result.get('correct'):
+                    st.success(f"✅ {tweety_result['result']} ({tweety_result['time']:.3f}s)")
+                else:
+                    st.error(f"❌ {tweety_result.get('result', 'ERROR')} ({tweety_result.get('time', 0):.3f}s)")
+            
+            st.markdown("---")
+        
+        # Summary
+        st.subheader("📋 Summary")
+        depqbf_correct = sum(1 for r in results if r['results'].get('DepQBF', {}).get('correct', False))
+        tweety_correct = sum(1 for r in results if r['results'].get('TweetyProject', {}).get('correct', False))
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("DepQBF Correct", f"{depqbf_correct}/{len(results)}")
+        with col2:
+            st.metric("TweetyProject Correct", f"{tweety_correct}/{len(results)}")
+        
+        if depqbf_correct > tweety_correct:
+            st.success("🏆 DepQBF performed better on these test cases!")
+        elif tweety_correct > depqbf_correct:
+            st.warning("⚠️ TweetyProject performed better (unusual)")
+        else:
+            st.info("🤝 Both solvers performed equally")
+
+elif mode == "🗣️ Natural Language":
     st.header("Natural Language to QBF")
     st.write("Enter your logical statement in plain English, and the system will convert it to QBF and evaluate it.")
+    
+    # Show current solver
+    st.info(f"🔧 Using {st.session_state.get('current_solver', 'Unknown')} solver for evaluation")
     
     # Text input
     text_input = st.text_area(
@@ -167,7 +406,7 @@ if mode == "🗣️ Natural Language":
     with st.expander("💡 Example Statements"):
         examples = [
             "Every proposition is either true or false",
-            "There exists a perfect solution to every problem",
+            "There exists a perfect solution to every problem", 
             "For any choice, there is a corresponding outcome",
             "All humans are mortal and Socrates is human",
             "Either it rains or it doesn't rain"
@@ -179,7 +418,7 @@ if mode == "🗣️ Natural Language":
     
     # Process button
     if st.button("🚀 Analyze Statement", type="primary", disabled=not text_input.strip()):
-        with st.spinner("Processing with LLM and TweetyProject..."):
+        with st.spinner(f"Processing with LLM and {st.session_state.get('current_solver')}..."):
             try:
                 result = st.session_state.system.evaluate_text(text_input)
                 
@@ -188,6 +427,7 @@ if mode == "🗣️ Natural Language":
                     'mode': 'Natural Language',
                     'input': text_input,
                     'result': result['result'],
+                    'solver': st.session_state.get('current_solver'),
                     'time': time.time(),
                     'details': result
                 })
@@ -219,17 +459,14 @@ if mode == "🗣️ Natural Language":
                     st.markdown(f"""
                     <div class="result-box {result_class}">
                         <h3>Result: {result['result']}</h3>
+                        <p>Solver: {st.session_state.get('current_solver')}</p>
                         <p>Execution: {result['execution_time']:.3f}s</p>
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # LLM Analysis
-                if result.get('analysis'):
-                    with st.expander("🤖 LLM Analysis", expanded=True):
-                        st.write(result['analysis'])
-                
                 # Technical details
                 with st.expander("🔧 Technical Details"):
+                    st.write(f"**Solver Used:** {st.session_state.get('current_solver')}")
                     st.write("**Solver Output:**")
                     st.code(result.get('solver_output', 'No output'), language='text')
                     if result.get('error'):
@@ -501,27 +738,33 @@ x | y | x,y | exists x, forall y""",
                 hide_index=True
             )
 
-# History section
+# History section (updated to show solver used)
 if st.session_state.history:
     st.markdown("---")
     st.header("📚 Query History")
     
     for i, entry in enumerate(reversed(st.session_state.history[-10:])):  # Show last 10
-        with st.expander(f"Query {len(st.session_state.history) - i}: {entry['mode']} - {entry['result']}"):
+        solver_used = entry.get('solver', 'Unknown')
+        badge_class = "depqbf-badge" if solver_used == "DepQBF" else "tweety-badge"
+        
+        with st.expander(f"Query {len(st.session_state.history) - i}: {entry['mode']} - {entry['result']} ({solver_used})"):
             col1, col2 = st.columns([3, 1])
             with col1:
                 st.write(f"**Input:** {entry['input']}")
                 if 'details' in entry and 'qbf_formula' in entry['details']:
                     st.write(f"**QBF:** {entry['details']['qbf_formula']}")
             with col2:
-                st.write(f"**Result:** {entry['result']}")
-                st.write(f"**Time:** {time.strftime('%H:%M:%S', time.localtime(entry['time']))}")
+                st.markdown(f"""
+                **Result:** {entry['result']}<br>
+                **Solver:** <span class="solver-badge {badge_class}">{solver_used}</span><br>
+                **Time:** {time.strftime('%H:%M:%S', time.localtime(entry['time']))}
+                """, unsafe_allow_html=True)
 
 # Footer
 st.markdown("---")
-st.markdown("""
+st.markdown(f"""
 <div style="text-align: center; color: #666; font-size: 0.9em;">
-    🧠 QBF Logic System | Powered by TweetyProject & LLM Integration<br>
-    Built with Streamlit • Open Source
+    🧠 QBF Logic System | Current Solver: {st.session_state.get('current_solver', 'Unknown')}<br>
+    Powered by DepQBF & TweetyProject • Built with Streamlit • Open Source
 </div>
 """, unsafe_allow_html=True)
